@@ -1,5 +1,5 @@
-#ifndef ELOG_LOGSERIAL_H
-#define ELOG_LOGSERIAL_H
+#ifndef ELOG_LOGCALLBACK_H
+#define ELOG_LOGCALLBACK_H
 
 #include <Arduino.h>
 #include "LogFormat.h"
@@ -7,10 +7,15 @@
 
 using namespace std;
 
-class LogSerial {
+class LogCallback {
+public:
+    // prototype for the callback function
+    typedef uint32_t (*callbackFunc_t)(LogLineEntry);
+
+private:
     struct Setting {
         uint8_t logId;
-        Stream* serial;
+        callbackFunc_t callback;
         const char* serviceName;
         uint8_t logLevel;
         uint8_t lastMsgLogLevel;
@@ -25,11 +30,11 @@ class LogSerial {
 public:
     void begin();
     void configure(const uint8_t maxRegistrations);
-    void registerSerial(const uint8_t logId, const uint8_t loglevel, const char* serviceName, Stream& serial, const uint8_t logFlags);
-    uint8_t getLogLevel(const uint8_t logId, Stream& serial);
-    void setLogLevel(const uint8_t logId, const uint8_t loglevel, Stream& serial);
-    uint8_t getLastMsgLogLevel(const uint8_t logId, Stream& serial);
-    void outputFromBuffer(const LogLineEntry logLineEntry, bool muteSerialOutput);
+    void registerCallback(const uint8_t logId, const uint8_t loglevel, const char* serviceName, callbackFunc_t funcPtr, const uint8_t logFlags);
+    uint8_t getLogLevel(const uint8_t logId, callbackFunc_t funcPtr);
+    void setLogLevel(const uint8_t logId, const uint8_t loglevel, callbackFunc_t funcPtr);
+    uint8_t getLastMsgLogLevel(const uint8_t logId, callbackFunc_t funcPtr);
+    void outputFromBuffer(const LogLineEntry logLineEntry);
     void handlePeek(const LogLineEntry logLineEntry, const uint8_t settingIndex);
     bool mustLog(const uint8_t logId, const uint8_t logLevel);
     void outputStats();
@@ -48,8 +53,8 @@ private:
     Stats stats;
 
     Setting* settings; // Array of registered serial settings
-    uint8_t maxSerialRegistrations = 0;
-    uint8_t registeredSerialCount = 0;
+    uint8_t maxCallbackRegistrations = 0;
+    uint8_t registeredCallbackCount = 0;
 
     bool peekEnabled = false;
     uint8_t peekLoglevel = ELOG_LEVEL_NOLOG;
@@ -63,4 +68,4 @@ private:
     void write(LogLineEntry logLineEntry, Setting& setting);
 };
 
-#endif // ELOG_LOGSERIAL_H
+#endif // ELOG_LOGCALLBACK_H

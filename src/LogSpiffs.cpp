@@ -1,8 +1,8 @@
 #include "ElogConfig.h"
 #ifdef ELOG_SPIFFS_ENABLE
 
-#include <Elog.h>
-#include <LogSpiffs.h>
+#include "Elog.h"
+#include "LogSpiffs.h"
 
 /* reset the buffer stats
  */

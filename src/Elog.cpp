@@ -1,4 +1,5 @@
-#include <Elog.h>
+#include "LogCallback.h"
+#include "Elog.h"
 
 Elog& Elog::getInstance() /**< Singleton pattern */
 {
@@ -30,6 +31,7 @@ void Elog::configure(uint16_t logLineCapacity, bool waitIfBufferFull)
     logSerial.begin();
     logSD.begin();
     logSpiffs.begin();
+    logCallback.begin();
 
     logStarted = true;
     writerTaskStart(); /**< background task to write logs to the output devices */
@@ -416,8 +418,67 @@ uint8_t Elog::getSyslogLastMsgLogLevel(const uint8_t logId, const uint8_t facili
     }
     return logSyslog.getLastMsgLogLevel(logId, facility);
 }
-
 #endif // ELOG_SYSLOG_ENABLE
+
+#ifdef ELOG_CALLBACK_ENABLE
+/** Configure callback for logging. If this is not called by the user a default configuration of 10 will be used
+ * @param maxRegistrations the maximum number of callbacks to register. Default is 10
+ */
+void Elog::configureCallback(const uint8_t maxRegistrations)
+{
+    if (!logStarted) {
+        configure();
+    }
+    logCallback.configure(maxRegistrations);
+}
+
+/** Register a callback for logging
+ * @param logId the id of the log
+ * @param logLevel the level of the log (VERBOSE, TRACE, DEBUG, INFO, NOTICE, WARNING, ERROR, CRITICAL, ALERT, EMERGENCY, NOLOG)
+ * @param serviceName the name of the service
+ * @param funcPtr the callback to log to 
+ * @param logFlags flags for the log (see LogFlags.h)
+ */
+void Elog::registerCallback(const uint8_t logId, const uint8_t logLevel, const char* serviceName, LogCallback::callbackFunc_t funcPtr, const uint8_t logFlags)
+{
+    if (!logStarted) {
+        configure();
+    }
+    if (logLevel > ELOG_LEVEL_NOLOG) {
+        Logger.logInternal(ELOG_LEVEL_ERROR, "Invalid logLevel! VERBOSE, TRACE, DEBUG, INFO, NOTICE, WARNING, ERROR, CRITICAL, ALERT, EMERGENCY, NOLOG are the valid levels!");
+        return;
+    }
+    logCallback.registerCallback(logId, logLevel, serviceName, funcPtr, logFlags);
+}
+
+uint8_t Elog::getCallbackLogLevel(const uint8_t logId, LogCallback::callbackFunc_t funcPtr)
+{
+    if (!logStarted) {
+        configure();
+    }
+    return logCallback.getLogLevel(logId, funcPtr);
+}
+
+void Elog::setCallbackLogLevel(const uint8_t logId, const uint8_t logLevel, LogCallback::callbackFunc_t funcPtr)
+{
+    if (!logStarted) {
+        configure();
+    }
+    if (logLevel > ELOG_LEVEL_NOLOG) {
+        Logger.logInternal(ELOG_LEVEL_ERROR, "Invalid logLevel! VERBOSE, TRACE, DEBUG, INFO, NOTICE, WARNING, ERROR, CRITICAL, ALERT, EMERGENCY, NOLOG are the valid levels!");
+        return;
+    }
+    logCallback.setLogLevel(logId, logLevel, funcPtr);
+}
+
+uint8_t Elog::getCallbackLastMsgLogLevel(const uint8_t logId, LogCallback::callbackFunc_t funcPtr)
+{
+    if (!logStarted) {
+        configure();
+    }
+    return logCallback.getLastMsgLogLevel(logId, funcPtr);
+}
+#endif // ELOG_CALLBACK_ENABLE
 
 /**
  * Configure the internal logging
@@ -447,6 +508,7 @@ void Elog::enableQuery(Stream& serialPort)
     logSD.enableQuery(serialPort);
     logSerial.enableQuery(serialPort);
     logSyslog.enableQuery(serialPort);
+    logCallback.enableQuery(serialPort);
 
     queryEnabled = true;
     querySerial = &serialPort;
@@ -527,6 +589,7 @@ void Elog::outputFromBuffer()
         logSD.outputFromBuffer(logLineEntry);
         logSpiffs.outputFromBuffer(logLineEntry);
         logSyslog.outputFromBuffer(logLineEntry);
+        logCallback.outputFromBuffer(logLineEntry);
 
         delete logLineEntry.logMessage; // clear the memory allocated for the log message
     }
@@ -569,6 +632,7 @@ bool Elog::mustLog(uint8_t logId, uint8_t logLevel)
     status |= logSD.mustLog(logId, logLevel);
     status |= logSpiffs.mustLog(logId, logLevel);
     status |= logSyslog.mustLog(logId, logLevel);
+    status |= logCallback.mustLog(logId, logLevel);
     status |= (queryState == QUERY_WAITING_FOR_PEEK_QUIT); // if in peek mode, always log
     return status;
 }
@@ -639,6 +703,7 @@ void Elog::outputStats()
         logSerial.outputStats();
         logSpiffs.outputStats();
         logSyslog.outputStats();
+        logCallback.outputStats();
 
         lastOutput = millis();
         maxBuffPct = 0;
@@ -718,6 +783,8 @@ void Elog::queryProcessIncomingCmd(const char* command)
         queryCmdSerial();
     } else if (strcmp(cmd, "syslog") == 0) {
         queryCmdSyslog();
+    } else if (strcmp(cmd, "callback") == 0) {
+        queryCmdCallback();
     } else if (strcmp(cmd, "peek") == 0) {
         queryCmdPeek(param, param2, param3);
         return;
@@ -739,14 +806,16 @@ void Elog::queryProcessIncomingCmd(const char* command)
 void Elog::queryStateDisabled(char c)
 {
     if (c == ' ') {
-        if (logSpiffs.registeredCount() > 0) {
+        if (logCallback.registeredCount() > 0) {
+            queryDevice = CALLBACK;
+        } else if (logSpiffs.registeredCount() > 0) {
             queryDevice = SPIFFS;
         } else if (logSD.registeredCount() > 0) {
             queryDevice = SD;
         } else if (logSerial.registeredCount() > 0) {
             queryDevice = SER;
         } else {
-            querySerial->println("No SPIFFS,SD or serial registered. Exiting query mode");
+            querySerial->println("No CALLBACK, SPIFFS, SD or serial registered. Exiting query mode");
             return;
         }
 
@@ -796,6 +865,7 @@ void Elog::queryStateWaitPeekQuit(char c)
         logSD.peekStop();
         logSerial.peekStop();
         logSyslog.peekStop();
+        logCallback.peekStop();
 
         querySerial->println("Peek stopped");
         queryPrintPrompt();
@@ -820,6 +890,8 @@ void Elog::queryCmdHelp()
         querySerial->println("serial (change to Serial port)");
     if (logSyslog.registeredCount() > 0)
         querySerial->println("syslog (change to Syslog)");
+    if (logCallback.registeredCount() > 0)
+        querySerial->println("callback (change to Callback)");
     querySerial->println("status (print the status of the logger)");
 
     // Then device specific help
@@ -831,6 +903,8 @@ void Elog::queryCmdHelp()
         logSerial.queryCmdHelp();
     } else if (queryDevice == SYSLOG) {
         logSyslog.queryCmdHelp();
+    } else if (queryDevice == CALLBACK) {
+        logCallback.queryCmdHelp();
     }
 }
 /**
@@ -876,6 +950,20 @@ void Elog::queryCmdSerial()
 }
 
 /**
+ * Select the Callbacks for query mode
+ */
+void Elog::queryCmdCallback()
+{
+    if (logCallback.registeredCount() == 0) {
+        querySerial->println("No Callback registered");
+        return;
+    }
+
+    queryDevice = CALLBACK;
+    querySerial->println("Callback selected");
+}
+
+/**
  * Select the Syslog for query mode
  */
 void Elog::queryCmdSyslog()
@@ -899,7 +987,7 @@ void Elog::queryCmdDir(const char* directory)
         logSpiffs.queryCmdDir(directory);
     } else if (queryDevice == SD) {
         logSD.queryCmdDir(directory);
-    } else if (queryDevice == SER || queryDevice == SYSLOG) {
+    } else if (queryDevice == SER || queryDevice == SYSLOG || queryDevice == CALLBACK) {
         querySerial->println("Unsupported command for this device");
     }
 }
@@ -914,7 +1002,7 @@ void Elog::queryCmdCd(const char* directory)
         logSpiffs.queryCmdCd(directory);
     } else if (queryDevice == SD) {
         logSD.queryCmdCd(directory);
-    } else if (queryDevice == SER || queryDevice == SYSLOG) {
+    } else if (queryDevice == SER || queryDevice == SYSLOG || queryDevice == CALLBACK) {
         querySerial->println("Unsupported command for this device");
     }
 }
@@ -929,7 +1017,7 @@ void Elog::queryCmdRm(const char* filename)
         logSpiffs.queryCmdRm(filename);
     } else if (queryDevice == SD) {
         logSD.queryCmdRm(filename);
-    } else if (queryDevice == SER || queryDevice == SYSLOG) {
+    } else if (queryDevice == SER || queryDevice == SYSLOG || queryDevice == CALLBACK) {
         querySerial->println("Unsupported command for this device");
     }
 }
@@ -944,7 +1032,7 @@ void Elog::queryCmdRmdir(const char* directory)
         logSpiffs.queryCmdRmdir(directory);
     } else if (queryDevice == SD) {
         logSD.queryCmdRmdir(directory);
-    } else if (queryDevice == SER || queryDevice == SYSLOG) {
+    } else if (queryDevice == SER || queryDevice == SYSLOG || queryDevice == CALLBACK) {
         querySerial->println("Unsupported command for this device");
     }
 }
@@ -958,7 +1046,7 @@ void Elog::queryCmdFormat()
         logSpiffs.queryCmdFormat();
     } else if (queryDevice == SD) {
         logSD.queryCmdFormat();
-    } else if (queryDevice == SER || queryDevice == SYSLOG) {
+    } else if (queryDevice == SER || queryDevice == SYSLOG || queryDevice == CALLBACK) {
         querySerial->println("Unsupported command for this device");
     }
 }
@@ -973,7 +1061,7 @@ void Elog::queryCmdType(const char* filename)
         logSpiffs.queryCmdType(filename);
     } else if (queryDevice == SD) {
         logSD.queryCmdType(filename);
-    } else if (queryDevice == SER || queryDevice == SYSLOG) {
+    } else if (queryDevice == SER || queryDevice == SYSLOG || queryDevice == CALLBACK) {
         querySerial->println("Unsupported command for this device");
     }
 }
@@ -994,6 +1082,8 @@ void Elog::queryCmdPeek(const char* filename, const char* loglevel, const char* 
         peekStarted = logSerial.queryCmdPeek(filename, loglevel, textFilter);
     } else if (queryDevice == SYSLOG) {
         peekStarted = logSyslog.queryCmdPeek(filename, loglevel, textFilter);
+    } else if (queryDevice == CALLBACK) {
+        peekStarted = logCallback.queryCmdPeek(filename, loglevel, textFilter);
     }
 
     if (peekStarted) {
@@ -1036,6 +1126,9 @@ void Elog::queryCmdStatus()
     if (logSyslog.registeredCount() > 0) {
         logSyslog.queryCmdStatus();
     }
+    if (logCallback.registeredCount() > 0) {
+        logCallback.queryCmdStatus();
+    }
 }
 
 /**
@@ -1051,6 +1144,8 @@ void Elog::queryPrintPrompt()
         logSerial.queryPrintPrompt();
     } else if (queryDevice == SYSLOG) {
         logSyslog.queryPrintPrompt();
+    } else if (queryDevice == CALLBACK) {
+        logCallback.queryPrintPrompt();
     }
 }
 

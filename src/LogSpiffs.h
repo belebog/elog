@@ -5,9 +5,9 @@
 
 #ifdef ELOG_SPIFFS_ENABLE
 
-#include <LogFormat.h>
-#include <LogRingBuff.h>
-#include <LogCommon.h>
+#include "LogFormat.h"
+#include "LogRingBuff.h"
+#include "LogCommon.h"
 
 #define SPIFFS_MIN_FREE_SPACE 20000 // 20kB
 #define SPIFFS_SYNC_FILES_EVERY 5000 // 5s
