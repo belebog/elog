@@ -190,6 +190,10 @@ private:
 
     void writerTaskStart();
     static void writerTask(void* parameter);
+#if defined (ELOG_SD_ENABLE) || defined(ELOG_SPIFFS_ENABLE)
+    void syncTaskStart();
+    static void syncTask(void* parameter);
+#endif
     void outputFromBuffer();
     void buffAddLogLine(LogLineEntry& logLineEntry);
     bool mustLog(uint8_t logId, uint8_t logLevel);

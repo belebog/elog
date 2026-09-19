@@ -35,6 +35,9 @@ void Elog::configure(uint16_t logLineCapacity, bool waitIfBufferFull)
 
     logStarted = true;
     writerTaskStart(); /**< background task to write logs to the output devices */
+#if defined (ELOG_SD_ENABLE) || defined(ELOG_SPIFFS_ENABLE)
+    syncTaskStart(); /**< background task to synchronize logs files to the output devices */
+#endif
 
     logInternal(ELOG_LEVEL_NOTICE, "Logger started with buffer capacity: %d messages", logLineCapacity);
 }
@@ -542,13 +545,13 @@ void Elog::writerTaskStart()
 {
     TaskHandle_t handleWriterTask = (TaskHandle_t)xTaskCreate(
         writerTask, // Task function.
-        "writeTask", // String with name of task.
+        "writeLogTask", // String with name of task.
         5000, // Stack size in bytes. This seems enough for it not to crash.
         this, // Parameter passed as input of the task.
         1, // Priority of the task.
         NULL); // Task handle.
     if (handleWriterTask == NULL) {
-        panic("Failed to create log task!");
+        panic("Failed to create log writer task!");
         return;
     }
     logInternal(ELOG_LEVEL_DEBUG, "Log writer task started.");
@@ -571,6 +574,46 @@ void Elog::writerTask(void* parameter)
         vTaskDelay(1);
     }
 }
+
+#if defined (ELOG_SD_ENABLE) || defined(ELOG_SPIFFS_ENABLE)
+/**
+ * Start the synchronize task. This task will flush the logs to the output devices
+ */
+void Elog::syncTaskStart()
+{
+    TaskHandle_t handleSyncTask = (TaskHandle_t)xTaskCreate(
+        syncTask, // Task function.
+        "syncLogTask", // String with name of task.
+        3000, // Stack size in bytes. 
+        this, // Parameter passed as input of the task.
+        1, // Priority of the task.
+        NULL); // Task handle.
+    if (handleSyncTask == NULL) {
+        panic("Failed to create log sync task!");
+        return;
+    }
+    logInternal(ELOG_LEVEL_DEBUG, "Log sync task started.");
+}
+
+/**
+ * The synchoniser task. This task will flush the logs to the output devices
+ * @param parameter the parameter passed from the task creation. It is the Elog instance
+ */
+void Elog::syncTask(void* parameter)
+{
+    bool which = false;
+    Elog& elog = *(Elog*)parameter;
+    while (true) {
+        if(which){ // alternate between SD and SPIFFS to keep the load lower
+            // ToDo: elog.logSD.allFilesSync();
+        } else {
+            elog.logSpiffs.allFilesSync();
+        }
+        which = !which;
+        vTaskDelay(2500/portTICK_PERIOD_MS);
+    }
+}
+#endif // defined (ELOG_SD_ENABLE) || defined(ELOG_SPIFFS_ENABLE)
 
 /**
  * Output the logs from the ring buffer to the output devices
